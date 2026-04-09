@@ -42,3 +42,48 @@ critical = logger.critical
 
 # Add the root directory to the Python path so we can import from scripts.
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+__all__ = [
+    "debug",
+    "info",
+    "warning",
+    "error",
+    "critical",
+    "logger",
+]
+
+# Direction Discovery subpackage
+try:
+    from ltx_trainer.direction_discovery import (
+        DirectionDiscoveryConfig,
+        DiffusionGenerationConfig,
+        DiffusionInterface,
+        VAEInterface,
+        LatentController,
+        LatentManipulation,
+        create_direction_generator,
+        StabilityEvaluator,
+        StabilityResults,
+        create_metric,
+        load_video,
+        save_video,
+        create_direction_grid,
+    )
+    
+    __all__.extend([
+        "DirectionDiscoveryConfig",
+        "DiffusionGenerationConfig",
+        "DiffusionInterface",
+        "VAEInterface",
+        "LatentController",
+        "LatentManipulation",
+        "create_direction_generator",
+        "StabilityEvaluator",
+        "StabilityResults",
+        "create_metric",
+        "load_video",
+        "save_video",
+        "create_direction_grid",
+    ])
+except Exception:
+    pass  # Direction Discovery not available
