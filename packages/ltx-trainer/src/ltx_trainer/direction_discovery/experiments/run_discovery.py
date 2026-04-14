@@ -70,6 +70,31 @@ def _to_grayscale_video(video: torch.Tensor) -> torch.Tensor:
     return gray3.clamp(0.0, 1.0)
 
 
+def _adjust_brightness_video(video: torch.Tensor, factor: float) -> torch.Tensor:
+    """Scale video brightness by factor for [C, F, H, W] input in [0, 1]."""
+    return (video * factor).clamp(0.0, 1.0)
+
+
+def _zoom_in_video(video: torch.Tensor, zoom_scale: float) -> torch.Tensor:
+    """Create a zoomed-in version of [C, F, H, W] while preserving output shape."""
+    import torch.nn.functional as F
+
+    if zoom_scale <= 1.0:
+        raise ValueError(f"zoom_scale must be > 1.0 for zoom-in, got {zoom_scale}")
+
+    c, f, h, w = video.shape
+    up_h = max(int(round(h * zoom_scale)), h + 1)
+    up_w = max(int(round(w * zoom_scale)), w + 1)
+
+    video_2d = video.permute(1, 0, 2, 3)  # [F, C, H, W]
+    zoomed = F.interpolate(video_2d, size=(up_h, up_w), mode="bilinear", align_corners=False)
+
+    top = (up_h - h) // 2
+    left = (up_w - w) // 2
+    zoomed = zoomed[:, :, top : top + h, left : left + w]
+    return zoomed.permute(1, 0, 2, 3).clamp(0.0, 1.0)
+
+
 def _match_video_shape(video: torch.Tensor, target_frames: int, target_height: int, target_width: int) -> torch.Tensor:
     """Match video [C, F, H, W] to target shape via trim + optional spatial upsample + center crop."""
     import torch.nn.functional as F
@@ -113,6 +138,12 @@ def run_direction_discovery(
     edit_after_diffusion: bool = False,
     grayscale_difference_direction: bool = False,
     save_grayscale_reference: bool = False,
+    brightness_difference_direction: bool = False,
+    brightness_factor: float = 0.6,
+    save_brightness_reference: bool = False,
+    zoom_difference_direction: bool = False,
+    zoom_scale: float = 1.1,
+    save_zoom_reference: bool = False,
     transfer_video_path: Optional[str] = None,
     transfer_alpha: Optional[float] = None,
     single_alpha: Optional[float] = None,
@@ -167,6 +198,21 @@ def run_direction_discovery(
 
     if diffusion_noise_scale < 0.0 or diffusion_noise_scale > 1.0:
         raise ValueError(f"diffusion_noise_scale must be in [0, 1], got {diffusion_noise_scale}")
+    if brightness_factor <= 0.0 or brightness_factor > 1.0:
+        raise ValueError(f"brightness_factor must be in (0, 1], got {brightness_factor}")
+    if zoom_scale <= 1.0:
+        raise ValueError(f"zoom_scale must be > 1.0, got {zoom_scale}")
+
+    enabled_sources = [
+        grayscale_difference_direction,
+        brightness_difference_direction,
+        zoom_difference_direction,
+    ]
+    if sum(int(x) for x in enabled_sources) > 1:
+        raise ValueError(
+            "Use only one direction source: grayscale_difference_direction OR "
+            "brightness_difference_direction OR zoom_difference_direction"
+        )
 
     console.print("[bold cyan]Direction Discovery Experiment[/bold cyan]")
     console.print(f"Video: {video_path}")
@@ -184,6 +230,16 @@ def run_direction_discovery(
     console.print(f"Edit stage: {'post-diffusion' if edit_after_diffusion else 'pre-diffusion'}")
     if grayscale_difference_direction:
         console.print("Difference direction source: original vs grayscale video latents")
+    if brightness_difference_direction:
+        console.print(
+            f"Difference direction source: original vs brightness-reduced latents (factor={brightness_factor:.3f})"
+        )
+        console.print("[dim]Direction sign note: positive alpha will darken; negative alpha will brighten.[/dim]")
+    if zoom_difference_direction:
+        console.print(
+            f"Difference direction source: original vs zoomed latents (zoom_scale={zoom_scale:.3f})"
+        )
+        console.print("[dim]Direction sign note: positive alpha will zoom in; negative alpha will zoom out.[/dim]")
     if transfer_video_path is not None:
         console.print(f"Transfer video: {transfer_video_path}")
     console.print(f"Backend: {'diffusion' if use_diffusion else 'vae-only'}")
@@ -280,6 +336,34 @@ def run_direction_discovery(
             seed=config.direction_config.seed,
             reference_latents=grayscale_latents,
         )
+    elif method == "difference" and brightness_difference_direction:
+        with console.status("[bold]Encoding brightness-reduced reference for difference direction...[/bold]"):
+            darker_video = _adjust_brightness_video(video, brightness_factor)
+            if save_brightness_reference:
+                darker_path = output_dir / "brightness_reduced_reference.mp4"
+                save_video(darker_video, darker_path, fps=fps)
+                console.print(f"[green]✓[/green] Saved brightness-reduced reference video: {darker_path}")
+
+            darker_latents = vae.encode(darker_video.unsqueeze(0))
+            console.print(f"[green]✓[/green] Brightness-reduced latent shape: {darker_latents.shape}")
+
+        # Explicit direction: v = z_dark - z_orig so positive alpha darkens.
+        v = (darker_latents - latents).squeeze(0)
+        directions = [v.clone() for _ in range(num_directions)]
+    elif method == "difference" and zoom_difference_direction:
+        with console.status("[bold]Encoding zoomed reference for difference direction...[/bold]"):
+            zoomed_video = _zoom_in_video(video, zoom_scale)
+            if save_zoom_reference:
+                zoomed_path = output_dir / "zoom_reference.mp4"
+                save_video(zoomed_video, zoomed_path, fps=fps)
+                console.print(f"[green]✓[/green] Saved zoom reference video: {zoomed_path}")
+
+            zoomed_latents = vae.encode(zoomed_video.unsqueeze(0))
+            console.print(f"[green]✓[/green] Zoom latent shape: {zoomed_latents.shape}")
+
+        # Explicit direction: v = z_zoom - z_orig so positive alpha tends to zoom in.
+        v = (zoomed_latents - latents).squeeze(0)
+        directions = [v.clone() for _ in range(num_directions)]
     else:
         directions = generator.generate(latents, num_directions, seed=config.direction_config.seed)
     console.print(f"[green]✓[/green] Generated {len(directions)} directions")
@@ -353,6 +437,10 @@ def run_direction_discovery(
             "use_diffusion": use_diffusion,
             "edit_after_diffusion": edit_after_diffusion,
             "grayscale_difference_direction": grayscale_difference_direction,
+            "brightness_difference_direction": brightness_difference_direction,
+            "brightness_factor": brightness_factor,
+            "zoom_difference_direction": zoom_difference_direction,
+            "zoom_scale": zoom_scale,
             "prompt": prompt,
             "num_inference_steps": num_inference_steps,
             "seed": seed,

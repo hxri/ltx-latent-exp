@@ -51,6 +51,8 @@ def run_transfer_saved_direction(
     stg_scale: float = 0.0,
     diffusion_noise_scale: float = 0.2,
     seed: int = 123,
+    save_difference_map: bool = True,
+    difference_map_gain: float = 20.0,
 ) -> None:
     """Apply a saved direction tensor to multiple videos without rediscovering directions."""
     if len(transfer_video_paths) == 0:
@@ -188,12 +190,25 @@ def run_transfer_saved_direction(
         save_video(original_decoded, output_dir / f"{stem}_decoded_base.mp4", fps=fps)
         save_video(edited, output_dir / f"{stem}_edited.mp4", fps=fps)
 
+        diff_map_path = None
+        if save_difference_map:
+            diff_map = (edited.float() - original_decoded.float()).abs() * difference_map_gain
+            diff_map = diff_map.clamp(0.0, 1.0)
+            diff_map_path = output_dir / f"{stem}_diff_map_x{difference_map_gain:g}.mp4"
+            save_video(diff_map, diff_map_path, fps=fps)
+
+        base_metrics = _video_change_metrics(original_decoded, edited)
         summary.append(
             {
                 "video": str(vpath),
                 "alpha": alpha,
                 "direction_target_rms": direction_target_rms,
-                "metrics_base_vs_edited": _video_change_metrics(original_decoded, edited),
+                "metrics_base_vs_edited": base_metrics,
+                "difference_map": {
+                    "enabled": save_difference_map,
+                    "gain": difference_map_gain,
+                    "path": str(diff_map_path) if diff_map_path is not None else None,
+                },
             }
         )
         console.print(f"[green]✓[/green] Saved transfer outputs for {vpath.name}")
@@ -211,6 +226,8 @@ def run_transfer_saved_direction(
                     "edit_after_diffusion": edit_after_diffusion,
                     "seed": seed,
                     "diffusion_noise_scale": diffusion_noise_scale,
+                    "save_difference_map": save_difference_map,
+                    "difference_map_gain": difference_map_gain,
                 },
                 "results": summary,
             },

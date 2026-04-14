@@ -32,7 +32,7 @@ python -m ltx_trainer.direction_discovery run-direction-discovery \
   # --output-dir /home/LTX-2/outputs/direction_discovery_bw_transfer_$(date +%Y%m%d_%H%M%S)
 
   python -m ltx_trainer.direction_discovery run-transfer-saved-direction \
-  /home/LTX-2/outputs/direction_discovery_bw_transfer_20260409_100356/directions/direction_0.pt \
+  /home/LTX-2/outputs/direction_discovery_zoom_20260409_112055/directions/direction_0.pt \
   /home/LTX-2/downloads/15510000_640_360_60fps.mp4 \
   /home/LTX-2/downloads/3371825-sd_426_240_24fps.mp4 \
   /home/LTX-2/downloads/8154896-sd_960_540_25fps.mp4 \
